@@ -31,6 +31,8 @@ BallVelocity: Vector2;
 LeftScore: int = 0;
 RightScore: int = 0;
 
+PlayerCount := 1; // no more than 2
+
 sine_sound: Sound_Data;
 
 GameStateE :: enum {
@@ -70,6 +72,13 @@ MovePaddle :: (paddle_pos: *Vector2, move_up: bool, move_down: bool, DeltaTime: 
 	}
 }
 
+ResetControlsState :: () {
+	MoveRightPaddleUp = false;
+	MoveRightPaddleDown = false;
+	MoveLeftPaddleUp = false;
+	MoveLeftPaddleDown = false;
+}
+
 ResetObjects :: () {
 	distance_from_window_side := 15.0;
 	LeftPaddlePos = Vector2.{ 
@@ -100,11 +109,13 @@ UpdatePlayState :: () {
 				if it.key_code == .ARROW_DOWN {
 					MoveRightPaddleDown = xx it.key_pressed;
 				}
-				if it.key_code == #char "S" {
-					MoveLeftPaddleUp = xx it.key_pressed;
-				}
-				if it.key_code == #char "X" { 
-					MoveLeftPaddleDown = xx it.key_pressed;
+				if PlayerCount == 2 {
+					if it.key_code == #char "S" {
+						MoveLeftPaddleUp = xx it.key_pressed;
+					}
+					if it.key_code == #char "X" { 
+						MoveLeftPaddleDown = xx it.key_pressed;
+					}
 				}
 				if it.key_code == .ESCAPE {
 					GameState = .Paused;
@@ -112,51 +123,83 @@ UpdatePlayState :: () {
 					// NOTE: Resetting these here because since they are global
 					//       they can hold onto stale state that invalid after
 					//       resuming.
-					MoveRightPaddleUp = false;
-					MoveRightPaddleDown = false;
-					MoveLeftPaddleUp = false;
-					MoveLeftPaddleDown = false;
+					ResetControlsState();
 				}
 			}
 		}
+	}
+	
+	if PlayerCount == 1 {
+		center_of_paddle_y := LeftPaddlePos.y + (PADDLE_HEIGHT/2);
+		center_of_ball_y := BallPos.y + (BALL_SIZE/2);
+
+		paddle_can_move_up := (LeftPaddlePos.y + PADDLE_HEIGHT) < cast(float)WINDOW_HEIGHT;
+		ball_is_above_paddle_center := center_of_ball_y > center_of_paddle_y;
+		MoveLeftPaddleUp = paddle_can_move_up && ball_is_above_paddle_center;
+		
+		paddle_can_move_down := LeftPaddlePos.y > 0;
+		ball_is_below_paddle_center := center_of_ball_y < center_of_paddle_y;
+		MoveLeftPaddleDown = paddle_can_move_down && ball_is_below_paddle_center;
 	}
 
 	MovePaddle(*LeftPaddlePos, MoveLeftPaddleUp, MoveLeftPaddleDown, DeltaTime);
 	MovePaddle(*RightPaddlePos, MoveRightPaddleUp, MoveRightPaddleDown, DeltaTime);
 
-	BallPos += (BALL_SPEED * BallVelocity) * DeltaTime;
+	new_ball_pos := BallPos + ((BALL_SPEED * BallVelocity) * DeltaTime);
 		
-	intersected_with_right_paddle := 
-		((BallPos.x + BALL_SIZE) >= RightPaddlePos.x) && 
-		(BallPos.y >= RightPaddlePos.y) &&
-		(BallPos.y <= (RightPaddlePos.y + PADDLE_HEIGHT));
-	intersected_with_left_paddle := 
-		(BallPos.x <= (LeftPaddlePos.x + PADDLE_WIDTH)) &&
-		(BallPos.y >= LeftPaddlePos.y) &&
-		(BallPos.y <= (LeftPaddlePos.y + PADDLE_HEIGHT));
-		
-	if intersected_with_left_paddle || intersected_with_right_paddle {
+	hit_right_paddle := 
+		((new_ball_pos.x + BALL_SIZE) >= RightPaddlePos.x) && 
+ 		(new_ball_pos.y >= RightPaddlePos.y) &&
+	 	(new_ball_pos.y <= (RightPaddlePos.y + PADDLE_HEIGHT));
+	hit_left_paddle := 
+		(new_ball_pos.x <= (LeftPaddlePos.x + PADDLE_WIDTH)) &&
+		(new_ball_pos.y >= LeftPaddlePos.y) &&
+		(new_ball_pos.y <= (LeftPaddlePos.y + PADDLE_HEIGHT));
+
+	hit_paddle := hit_left_paddle || hit_right_paddle;
+	if hit_paddle {
 		BallVelocity.x *= -1.1;
+		
+		hit_direction_adjustment := .1;
+		
+		if MoveLeftPaddleUp || MoveRightPaddleUp {
+			BallVelocity.y += hit_direction_adjustment;
+		} else if MoveLeftPaddleDown || MoveRightPaddleDown {
+			BallVelocity.y -= hit_direction_adjustment;
+		}
+		
+		print("BallVelocity=%\n", BallVelocity);
 		PlayBounce();
 	}
 
-	hit_wall := ((BallPos.y + BALL_SIZE) >= cast(float) WINDOW_HEIGHT) || BallPos.y <= 0;
+	hit_wall := ((new_ball_pos.y + BALL_SIZE) >= cast(float) WINDOW_HEIGHT) || 
+		new_ball_pos.y <= 0;
 
 	if hit_wall {
 		BallVelocity.y *= -1;
+		print("BallVelocity=%\n", BallVelocity);
 		PlayBounce();
+	}
+
+	current_ball_speed := length(BallVelocity);
+	MAX_BALL_SPEED :: 5.0;
+	if current_ball_speed > MAX_BALL_SPEED {
+		ball_velocity_direction := normalize(BallVelocity);
+		BallVelocity = ball_velocity_direction * MAX_BALL_SPEED;
+	}
+
+	if !hit_wall && !hit_paddle {
+		BallPos = new_ball_pos;
 	}
 
 	if BallPos.x >= cast(float) WINDOW_WIDTH {
 		LeftScore += 1;
-		ResetObjects();
-		GameState = .Paused;
+		Reset();
 	}
 
 	if BallPos.x <= 0 {
 		RightScore += 1;
-		ResetObjects();
-		GameState = .Paused;
+		Reset();
 	}
 }
 
@@ -216,6 +259,16 @@ PlayBounce :: () {
 	start_playing(stream);
 }
 
+Reset :: (score: bool = false) {
+	if score {
+		LeftScore = 0;
+		RightScore = 0;
+	}
+	ResetObjects();
+	ResetControlsState();
+	GameState = .Paused;
+}
+
 main :: () {
 	window := create_window(WINDOW_WIDTH, WINDOW_HEIGHT, "Pong!");	
 	WINDOW_WIDTH, WINDOW_HEIGHT = get_render_dimensions(window);
@@ -246,6 +299,11 @@ main :: () {
 			if it.type == .QUIT {
 				running = false;
 				break;
+			}
+			if it.type == .KEYBOARD {
+				if it.key_code == #char "R" {
+					Reset(score = true);
+				}
 			}
 		}
 		if !running break;
